@@ -23,7 +23,9 @@ import java.io.IOException
 /**
  * Activity to login the user.
  */
-class LoginActivity : AppCompatActivity() {
+class LoginActivity : AppCompatActivity() , LoginContract.ILoginView{
+
+
 
     // Views
     lateinit var emailView: EditText
@@ -31,6 +33,7 @@ class LoginActivity : AppCompatActivity() {
     lateinit var progressBar: ProgressBar
     lateinit var loginButton: Button
     lateinit var prefs: SharedPreferences
+    lateinit var presenter:LoginContract.ILoginPresenter
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,45 +56,32 @@ class LoginActivity : AppCompatActivity() {
         val toolbar = findViewById(R.id.toolbar) as Toolbar
         setSupportActionBar(toolbar)
 
-        loginButton.setOnClickListener { attemptLogin() }
+        presenter = LoginPresenter(this)
+
+        loginButton.setOnClickListener { presenter.attemptLogin() }
 
         emailView.setText(prefs.getString(App.PREF_EMAIL, ""))
         passwordView.setText(prefs.getString("password", "")) // STOPSHIP
         passwordView.setOnEditorActionListener(TextView.OnEditorActionListener { _, id, _ ->
             if (id == R.id.login_submit || id == EditorInfo.IME_NULL) {
-                attemptLogin()
+                presenter.attemptLogin()
                 return@OnEditorActionListener true
             }
             false
         })
     }
 
-    fun attemptLogin() {
-        loginButton.isEnabled = false
 
-        // Reset errors.
-        emailView.error = null
-        passwordView.error = null
-
-        if (!validateInputs()) {
-            loginButton.isEnabled = true
-            return
-        }
-
-        progressBar.visibility = View.VISIBLE
-
-        LoginAsyncTask().execute(emailView.text.toString(), passwordView.text.toString())
-    }
 
     private fun validateInputs(): Boolean {
         var isValid = true
         val email = emailView.text.toString()
         val password = passwordView.text.toString()
 
-        if (!isEmailValid(email)) {
-            emailView.error = getString(R.string.err_invalid_email)
-            isValid = false
-        }
+//        if (!isEmailValid(email)) {
+//            emailView.error = getString(R.string.err_invalid_email)
+//            isValid = false
+//        }
 
         if (email.isEmpty()) {
             emailView.error = getString(R.string.err_blank_email)
@@ -112,113 +102,40 @@ class LoginActivity : AppCompatActivity() {
         return isValid
     }
 
-    private fun isEmailValid(email: String): Boolean {
-        return email.contains("@") //TODO Improve email prevalidation
+
+
+
+
+    override fun loginButtonEnabled(enabled: Boolean) {
+        loginButton.isEnabled = enabled
     }
 
-    //TODO: We don't want this to be an inner class. We can fix it, or just replace it
-    // with RxJava like #6 suggests.
-    private inner class LoginAsyncTask : AsyncTask<String, Void, Boolean>() {
+    override fun setEmailError(error: Int?) {
+        emailView.error = error?.let { getString(it) }
+    }
 
-        override fun doInBackground(vararg params: String): Boolean? {
-            val email = params[0]
-            val password = params[1]
+    override fun setPasswordError(error: Int?) {
+        passwordView.error = error?.let {getString(it)}
+    }
 
-            try {
-                val client = ClientManager.client
+    override fun getEmailValue(): String {
+        return emailView.text.toString()
+    }
 
-                seOpenIdLogin(client, email, password)
-                loginToSE(client)
-                loginToSite(client, "https://stackoverflow.com", email, password)
-                return true
-            } catch (e: IOException) {
-                Timber.e(e)
-                return false
-            }
+    override fun getPasswordValue(): String {
+       return passwordView.text.toString()
+    }
 
-        }
+    override fun setProgressBarVisibility(visibility: Int) {
+        progressBar.visibility = visibility
+    }
 
-        override fun onPostExecute(success: Boolean?) {
-            if (success!!) {
-                prefs.edit().putBoolean(App.PREF_HAS_CREDS, true).apply()
-                this@LoginActivity.startActivity(Intent(this@LoginActivity, ChatActivity::class.java))
-                this@LoginActivity.finish()
-            } else {
-                progressBar.visibility = View.GONE
-                loginButton.isEnabled = false
-                Toast.makeText(this@LoginActivity, "Failed to connect", Toast.LENGTH_LONG).show()
-            }
-        }
+    override fun showToast(message: Int) {
+        Toast.makeText(this,message,Toast.LENGTH_SHORT).show()
+    }
 
-        @Throws(IOException::class)
-        private fun loginToSite(client: Client, site: String,
-                                email: String, password: String) {
-            val soFkey = Jsoup.connect(site + "/users/login/")
-                    .userAgent(Client.USER_AGENT).get()
-                    .select("input[name=fkey]").attr("value")
-
-            val soLoginRequestBody = FormEncodingBuilder()
-                    .add("email", email)
-                    .add("password", password)
-                    .add("fkey", soFkey)
-                    .build()
-            val soLoginRequest = Request.Builder()
-                    .url(site + "/users/login/")
-                    .post(soLoginRequestBody)
-                    .build()
-            val soLoginResponse = client.newCall(soLoginRequest).execute()
-            Timber.i("Site login: " + soLoginResponse.toString())
-        }
-
-        @Throws(IOException::class)
-        private fun loginToSE(client: Client) {
-            val loginPageRequest = Request.Builder()
-                    .url("http://stackexchange.com/users/login/")
-                    .build()
-            val loginPageResponse = client.newCall(loginPageRequest).execute()
-
-            val doc = Jsoup.parse(loginPageResponse.body().string())
-            val fkeyElements = doc.select("input[name=fkey]")
-            val fkey = fkeyElements.attr("value")
-
-            if (fkey == "") throw IOException("Fatal: No fkey found.")
-
-            val data = FormEncodingBuilder()
-                    .add("oauth_version", "")
-                    .add("oauth_server", "")
-                    .add("openid_identifier", "https://openid.stackexchange.com/")
-                    .add("fkey", fkey)
-
-            val loginRequest = Request.Builder()
-                    .url("https://stackexchange.com/users/authenticate/")
-                    .post(data.build())
-                    .build()
-            val loginResponse = client.newCall(loginRequest).execute()
-            Timber.i("So login: " + loginResponse.toString())
-        }
-
-        @Throws(IOException::class)
-        private fun seOpenIdLogin(client: Client, email: String, password: String) {
-            val seLoginPageRequest = Request.Builder()
-                    .url("https://openid.stackexchange.com/account/login/")
-                    .build()
-            val seLoginPageResponse = client.newCall(seLoginPageRequest).execute()
-
-            val seLoginDoc = Jsoup.parse(seLoginPageResponse.body().string())
-            val seLoginFkeyElements = seLoginDoc.select("input[name=fkey]")
-            val seFkey = seLoginFkeyElements.attr("value")
-
-            val seLoginRequestBody = FormEncodingBuilder()
-                    .add("email", email)
-                    .add("password", password)
-                    .add("fkey", seFkey)
-                    .build()
-            val seLoginRequest = Request.Builder()
-                    .url("https://openid.stackexchange.com/account/login/submit/")
-                    .post(seLoginRequestBody)
-                    .build()
-            val seLoginResponse = client.newCall(seLoginRequest).execute()
-            Timber.i("Se openid login: " + seLoginResponse.toString())
-        }
+    override fun startChatActivity() {
+        this@LoginActivity.startActivity(Intent(this@LoginActivity, ChatActivity::class.java))
+        this@LoginActivity.finish()
     }
 }

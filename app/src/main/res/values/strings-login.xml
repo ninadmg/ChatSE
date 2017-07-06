@@ -11,4 +11,5 @@
     <string name="err_incorrect_password">This password is incorrect</string>
 
     <string name="err_malformed_data">Network Error</string>
+    <string name="err_failed_to_connect">Failed to connect</string>
 </resources>
